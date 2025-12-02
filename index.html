@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Padel Weather</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            /* Enhanced shadow for a mobile card effect */
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.06);
+        }
+        .padel-green { color: #84cc16; }
+        .padel-bg { 
+            background-color: #1a2e35; 
+            /* Subtle shadow for fixed header */
+            box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.1);
+        }
+        /* Style for the hourly selector scrollbar */
+        .hourly-scroll::-webkit-scrollbar {
+            height: 4px;
+        }
+        .hourly-scroll::-webkit-scrollbar-thumb {
+            background: #bdbdbd; /* Darker thumb for visibility */
+            border-radius: 2px;
+        }
+        .hourly-scroll::-webkit-scrollbar-track {
+            background: #e5e7eb;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // --- Constants ---
+        const VENUES = [
+            { id: 1, name: "Africa Padel - Camps Bay", city: "Cape Town", lat: -33.952, lon: 18.377, altitude: 10 },
+            { id: 2, name: "Virgin Active - Point", city: "Cape Town", lat: -33.909, lon: 18.410, altitude: 15 },
+            { id: 3, name: "Wanderers Club", city: "Johannesburg", lat: -26.133, lon: 28.053, altitude: 1600 },
+            { id: 4, name: "Sandton Sports Club", city: "Johannesburg", lat: -26.090, lon: 28.040, altitude: 1550 },
+            { id: 5, name: "Africa Padel - V&A Waterfront", city: "Cape Town", lat: -33.906, lon: 18.421, altitude: 5 },
+            { id: 6, name: "Ballito Padel", city: "KZN", lat: -29.528, lon: 31.217, altitude: 30 }
+        ];
+
+        // --- Helper Functions ---
+
+        // Helper function to map WMO code to an icon
+        const getWeatherIcon = (code) => {
+            if (code >= 95) return 'fa-solid fa-cloud-bolt'; 
+            if (code >= 80) return 'fa-solid fa-cloud-showers-heavy'; 
+            if (code >= 71) return 'fa-solid fa-snowflake'; 
+            if (code >= 51) return 'fa-solid fa-cloud-rain'; 
+            if (code >= 30) return 'fa-solid fa-smog'; 
+            if (code >= 1) return 'fa-solid fa-cloud'; 
+            return 'fa-solid fa-sun'; 
+        };
+
+        // Calculates the Padel Playability Index (0-10)
+        const calculatePlayabilityIndex = (weather) => {
+            if (!weather) return 0;
+            
+            let score = 10; 
+
+            const temp = weather.temperature_2m;
+            const wind = weather.wind_speed_10m;
+            const rain = weather.rain;
+
+            // 1. Rain Penalty (Highest priority)
+            if (rain > 0.5) score -= 5; 
+            else if (rain > 0) score -= 3;   
+
+            // 2. Wind Penalty
+            if (wind > 35) score -= 4;  
+            else if (wind > 20) score -= 2; 
+
+            // 3. Temperature Penalty (Comfort)
+            if (temp < 10) score -= 3; 
+            else if (temp < 15) score -= 1; 
+            else if (temp > 30) score -= 3; 
+            else if (temp > 25) score -= 1; 
+
+            // Clamp score between 0 and 10
+            return Math.max(0, Math.min(10, Math.round(score)));
+        };
+
+        // Provides gear recommendations based on conditions
+        const getGearRecommendations = (speedRating, wind) => {
+            let ballRecommendation = "Standard Pressure Ball (e.g., Head Padel)";
+            let racketTip = "Choose your preferred racket (Balance)";
+
+            // Ball Logic based on Bounce Index
+            if (speedRating.includes("Super Fast")) {
+                ballRecommendation = "USE SLOWER BALLS. Choose a heavier, standard/low pressure ball (e.g., Head Padel Pro) to control the high bounce.";
+            } else if (speedRating.includes("Dead Ball")) {
+                ballRecommendation = "USE FASTER BALLS. Choose a highly pressurized ball (e.g., Head Padel Pro S) to compensate for the cold/humidity.";
+            }
+
+            // Racket Tip Logic based on Wind
+            if (wind > 35) {
+                racketTip = "CONTROL RACKET. Low balance and round shape to minimize turbulence and increase precision in high wind.";
+            } else if (wind > 20) {
+                racketTip = "FOCUS ON CONTROL. A slight control bias is beneficial today to handle wind turbulence on lobs.";
+            } else {
+                racketTip = "POWER RACKET. Good day for a power racket (diamond shape) if you want to finish points easily.";
+            }
+
+            return { ballRecommendation, racketTip };
+        };
+
+
+        // --- Component: Header ---
+        const Header = () => (
+            // Added z-50 to ensure the header is always on top on mobile scroll
+            <div className="padel-bg text-white p-4 shadow-lg sticky top-0 z-50">
+                <div className="max-w-md mx-auto flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                        <i className="fa-solid fa-table-tennis-paddle-ball text-yellow-400 text-2xl"></i>
+                        <h1 className="text-xl font-bold tracking-tight">Padel Weather</h1>
+                    </div>
+                    <div className="text-xs text-gray-400 bg-gray-800 px-2 py-1 rounded">Beta v0.3</div>
+                </div>
+            </div>
+        );
+
+        // --- Component: Suggest Court (Fixed) ---
+        const SuggestCourt = () => {
+            // Corrected email and subject line as per user request
+            const emailAddress = "courts@padelweather.co.za";
+            const subject = "Please add this court to the list";
+            const body = `Hi Padel Weather Team,%0D%0A%0D%0AHere is an outdoor court to add:%0D%0A%0D%0ACourt Name:%0D%0ALocation/City:%0D%0ALatitude (Optional):%0D%0ALongitude (Optional):%0D%0AAltitude (Optional):%0D%0A%0D%0AThank you!`;
+
+            return (
+                <div className="mt-2 text-center">
+                    <a 
+                        href={`mailto:${emailAddress}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`}
+                        className="text-xs text-gray-500 hover:text-green-600 transition-colors border-b border-gray-300 hover:border-green-600 pb-0.5 px-4 py-2 inline-block"
+                    >
+                        <i className="fa-solid fa-plus-circle mr-1"></i>
+                        Don't see your club? Suggest an Outdoor Court
+                    </a>
+                </div>
+            );
+        };
+
+        // --- Component: Strategy Card (Updated) ---
+        const StrategyCard = ({ weather, altitude, playabilityIndex, bestTime }) => {
+            if (!weather) return null;
+
+            // Use the most relevant temp/wind data
+            const temp = weather.temperature_2m; 
+            const wind = weather.wind_speed_10m;
+            const humidity = weather.relative_humidity_2m || 70;
+            
+            // 1. Bounce Index (Speed) Logic
+            let speedRating = "Medium";
+            let speedColor = "text-yellow-600";
+            let speedTip = "Standard conditions.";
+
+            if (altitude > 1000) { // Joburg Logic
+                if (temp > 25) {
+                    speedRating = "Super Fast 🚀";
+                    speedColor = "text-red-600";
+                    speedTip = "High altitude + Heat. The ball will fly. Avoid flat smashes from the back.";
+                } else {
+                    speedRating = "Fast";
+                    speedColor = "text-orange-500";
+                    speedTip = "Altitude is aiding power. Use top-spin to keep the ball in.";
+                }
+            } else { // Coastal Logic
+                if (temp < 15) {
+                    speedRating = "Dead Ball 🐢";
+                    speedColor = "text-blue-600";
+                    speedTip = "Cold & heavy. Smashes won't come back. Play patient bandejas.";
+                } else if (temp > 28) {
+                    speedRating = "Lively";
+                    speedColor = "text-green-600";
+                    speedTip = "Warm air helps the bounce. Good day for x3 smashes.";
+                }
+            }
+
+            // 2. Glass Index (Moisture)
+            let glassStatus = "Dry";
+            let glassTip = "";
+            if (humidity > 80 || (weather.rain > 0.1)) {
+                glassStatus = "Slippery 💧";
+                glassTip = "Glass is slick. Ball will skid low. Bend your knees!";
+            } else {
+                glassStatus = "Grippy";
+            }
+
+            // 3. Wind Strategy
+            let windStrategy = "Calm day. Go for the lines.";
+            if (wind > 20) {
+                windStrategy = "Windy! Aim for the center. Lobs are dangerous today.";
+            } else if (wind > 35) {
+                windStrategy = "Gale Force! Keep the ball on the ground. Forget the lob.";
+            }
+
+            // 4. Gear Recommendations
+            const { ballRecommendation, racketTip } = getGearRecommendations(speedRating, wind);
+
+            // WhatsApp Share Generator
+            const shareToWhatsApp = () => {
+                const hour = new Date(weather.time).toLocaleTimeString('en-ZA', { hour: 'numeric', minute: '2-digit' });
+                const text = `🎾 *Padel Weather Report for ${hour}*\nScore: ${playabilityIndex}/10\n⚡ Speed: ${speedRating}\n🧠 Tip: ${speedTip}\nCheck before you play!`;
+                const url = `https://wa.me/?text=${encodeURIComponent(text)}`;
+                window.open(url, '_blank');
+            };
+
+            return (
+                // Use enhanced shadow and rounded corners for mobile card feel
+                <div className="glass-panel rounded-2xl p-5 shadow-xl mt-4 border-l-4 border-yellow-400">
+                    <h2 className="text-gray-500 text-xs font-bold uppercase tracking-wider mb-3">Match Strategy</h2>
+                    
+                    {/* Padel Index and Best Time */}
+                    <div className="mb-4 grid grid-cols-2 gap-3">
+                        {/* Increased padding for better visual weight */}
+                        <div className="bg-green-50 p-4 rounded-xl text-center">
+                            <div className="text-xs text-green-600 font-bold uppercase">Playability Index</div>
+                            <div className="font-extrabold text-3xl text-gray-800 mt-1">{playabilityIndex}<span className="text-sm font-normal">/10</span></div>
+                        </div>
+                        <div className="bg-yellow-50 p-4 rounded-xl flex flex-col justify-center items-center">
+                            <div className="text-xs text-yellow-600 font-bold uppercase">Best Hour Today</div>
+                            <div className="font-bold text-xl text-gray-800 mt-1">{bestTime}</div>
+                        </div>
+                    </div>
+                    
+                    {/* Speed Meter */}
+                    <div className="mb-4 pt-2">
+                        <div className="flex justify-between items-end mb-1">
+                            <span className="text-sm font-semibold text-gray-700">Court Speed</span>
+                            <span className={`text-sm font-bold ${speedColor}`}>{speedRating}</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                            <div className={`h-2 rounded-full ${altitude > 1000 ? 'bg-red-500 w-full' : (temp < 15 ? 'bg-blue-500 w-1/4' : 'bg-green-500 w-3/4')}`}></div>
+                        </div>
+                        <p className="text-xs text-gray-600 mt-2 italic">"{speedTip}"</p>
+                    </div>
+
+                    {/* Wind & Glass Grid */}
+                    <div className="grid grid-cols-2 gap-3 mb-4">
+                        <div className="bg-blue-50 p-3 rounded-xl">
+                            <div className="text-xs text-blue-500 font-bold uppercase">Glass</div>
+                            <div className="font-bold text-gray-800">{glassStatus}</div>
+                            {glassStatus.includes("Slippery") && <div className="text-[11px] leading-3 mt-1 text-blue-700">{glassTip}</div>}
+                        </div>
+                        <div className="bg-gray-100 p-3 rounded-xl">
+                            <div className="text-xs text-gray-500 font-bold uppercase">Wind Tactician</div>
+                            <div className="text-[11px] leading-3 mt-1 text-gray-700">{windStrategy}</div>
+                        </div>
+                    </div>
+
+                    {/* Gear Recommendations Grid */}
+                    <div className="mb-4">
+                        <h3 className="text-gray-500 text-xs font-bold uppercase tracking-wider mb-2">Gear Recommendations</h3>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div className="bg-gray-50 border border-gray-200 p-3 rounded-xl">
+                                <div className="text-xs text-gray-600 font-bold flex items-center mb-1"><i className="fa-solid fa-circle-dot mr-1 text-red-500"></i> Ball Type</div>
+                                <div className="text-[11px] text-gray-700">{ballRecommendation}</div>
+                            </div>
+                            <div className="bg-gray-50 border border-gray-200 p-3 rounded-xl">
+                                <div className="text-xs text-gray-600 font-bold flex items-center mb-1"><i className="fa-solid fa-grip-lines-vertical mr-1 text-green-500"></i> Racket Tip</div>
+                                <div className="text-[11px] text-gray-700">{racketTip}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Share Button (large and easy to press) */}
+                    <button 
+                        onClick={shareToWhatsApp}
+                        className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition-colors shadow-md hover:shadow-lg"
+                    >
+                        <i className="fa-brands fa-whatsapp text-xl"></i>
+                        Share Strategy to Group
+                    </button>
+                </div>
+            );
+        };
+
+        // --- Component: Hourly Selector (Mobile Scroll Focus) ---
+        // Now receives the full hourly data array
+        const HourlySelector = ({ fullHourlyData, selectedHourIndex, onSelectHour, dayDate }) => {
+            const now = new Date();
+            const isToday = new Date(dayDate).toDateString() === now.toDateString();
+
+            // 1. Get only the hours for the current selected day
+            const dayHourlyData = fullHourlyData.filter(h => h.time.startsWith(dayDate));
+            
+            // 2. Filter out past hours for today, otherwise return all
+            const displayHours = dayHourlyData.filter(hour => {
+                if (!isToday) return true;
+                const hourTime = new Date(hour.time);
+                return hourTime.getHours() >= now.getHours();
+            });
+
+            // 3. Check if the currently selected hour (from the full array) is one of the hours in the displayHours array.
+            // This is the hour data based on the full index managed by the App component
+            const currentlySelectedHourData = fullHourlyData[selectedHourIndex]; 
+            
+            // Check if the hour corresponding to the global index exists in the list of displayable hours for this day
+            const isCurrentlySelected = currentlySelectedHourData
+                ? displayHours.some(h => h.time === currentlySelectedHourData.time)
+                : false;
+            
+            // Effect to reset selection if the selected hour is no longer visible (e.g., switched days, or hour passed)
+            useEffect(() => {
+                if (displayHours.length > 0 && !isCurrentlySelected) {
+                    // Find the index of the first available hour in the *full* array
+                    const firstAvailableHour = displayHours[0];
+                    const firstAvailableIndex = fullHourlyData.indexOf(firstAvailableHour);
+                    
+                    // Only change if the index is different (to prevent re-rendering cycle)
+                    if (firstAvailableIndex !== selectedHourIndex) {
+                         // Pass the correct full index back to the parent
+                         onSelectHour(firstAvailableIndex);
+                    }
+                }
+            }, [dayDate, isCurrentlySelected, fullHourlyData, selectedHourIndex, onSelectHour]); 
+            
+            if (displayHours.length === 0 && isToday) {
+                 return <div className="mt-4 text-center text-gray-400 text-sm">No remaining hours today. Select another day.</div>;
+            }
+
+
+            return (
+                <div className="mt-4">
+                    <h3 className="text-gray-500 text-xs font-bold uppercase tracking-wider mb-2">Hourly View</h3>
+                    <div className="flex overflow-x-auto pb-2 space-x-3 hourly-scroll">
+                        {displayHours.map((hour, index) => {
+                            // Find the original index in the full array for the selected hour
+                            const originalIndex = fullHourlyData.indexOf(hour);
+                            const time = new Date(hour.time).toLocaleTimeString('en-ZA', { hour: 'numeric', minute: '2-digit' });
+                            const isSelected = originalIndex === selectedHourIndex;
+
+                            const playabilityIndex = calculatePlayabilityIndex(hour);
+                            let indexColor = 'bg-green-500 text-white';
+                            if (playabilityIndex < 7) indexColor = 'bg-yellow-500 text-gray-900';
+                            if (playabilityIndex < 4) indexColor = 'bg-red-500 text-white';
+
+                            return (
+                                <button
+                                    key={originalIndex}
+                                    onClick={() => onSelectHour(originalIndex)}
+                                    // Ensured minimum touch target size (p-3 and w-20)
+                                    className={`flex flex-col items-center p-3 rounded-xl transition-all border w-20 flex-shrink-0 
+                                        ${isSelected ? 'bg-yellow-400 border-yellow-500 shadow-md text-white font-bold' : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'}`
+                                    }
+                                >
+                                    <span className={`text-xs ${isSelected ? 'text-white' : 'text-gray-500'}`}>{time}</span>
+                                    {/* Slightly larger icon for mobile */}
+                                    <i className={`${getWeatherIcon(hour.weather_code)} text-xl mt-1 mb-1 ${isSelected ? 'text-white' : (hour.rain > 0.1 ? 'text-blue-500' : 'text-yellow-500')}`}></i>
+                                    <span className="text-base font-bold">{Math.round(hour.temperature_2m)}°</span>
+                                    {/* Playability Index as a prominent badge */}
+                                    <span className={`text-[10px] font-extrabold mt-1 px-2 py-0.5 rounded-full ${indexColor} opacity-95`}>
+                                        {playabilityIndex}/10
+                                    </span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Component: Weather Display ---
+        const WeatherDisplay = ({ weather }) => {
+            if (!weather) return <div className="text-center p-8 text-gray-400">Select a club to see forecast</div>;
+
+            const isRaining = weather.rain > 0.1; // Treat anything over 0.1mm as rain
+            const windSpeed = weather.wind_speed_10m;
+            const windGusts = weather.wind_gusts_10m;
+            
+            const mainTemp = weather.temperature_2m; 
+            
+            const weatherIcon = getWeatherIcon(weather.weather_code);
+            const weatherStatus = isRaining ? "Rain Expected" : (weather.weather_code < 1 ? "Clear Sky" : "Cloudy");
+            const humidity = weather.relative_humidity_2m;
+
+            return (
+                // Used glass-panel for a modern card effect
+                <div className="glass-panel rounded-2xl p-6 shadow-xl mt-4">
+                    <div className="flex justify-between items-start">
+                        <div>
+                            {/* Prominent temperature display */}
+                            <div className="text-6xl font-extrabold text-gray-800">{Math.round(mainTemp)}°</div>
+                            <div className="text-gray-500 mt-2 flex items-center gap-2 text-lg">
+                                <i className={`${weatherIcon} text-yellow-500`}></i>
+                                <span className="font-semibold">{weatherStatus}</span>
+                            </div>
+                        </div>
+                        <div className="text-right pt-2">
+                            <div className="flex flex-col items-end gap-2">
+                                <div className="flex items-center gap-2 text-gray-500 text-base">
+                                    <span className="text-sm font-medium">Humidity</span>
+                                    <span className="text-2xl font-bold text-gray-700">{Math.round(humidity)}<span className="text-xs font-normal">%</span></span>
+                                </div>
+                                <div className="flex items-center gap-2 text-gray-500 text-base">
+                                    <span className="text-sm font-medium">Wind</span>
+                                    <i className="fa-solid fa-wind text-gray-400"></i>
+                                    <span className="text-2xl font-bold text-gray-700">{Math.round(windSpeed)} <span className="text-xs font-normal">km/h</span></span>
+                                </div>
+                                {windGusts && (
+                                    <div className="flex items-center gap-2 text-gray-500 text-xs mt-0.5">
+                                        <span>Gusts: {Math.round(windGusts)} km/h</span>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Component: Weekly Outlook (5-Day) ---
+        const WeeklyOutlook = ({ dailyForecast, selectedDayIndex, onSelectDay }) => {
+            return (
+                <div className="mt-6">
+                    <h3 className="text-gray-500 text-xs font-bold uppercase tracking-wider mb-3">5-Day Outlook</h3>
+                    <div className="glass-panel rounded-xl p-4 shadow-xl flex justify-between text-center overflow-x-auto gap-2">
+                        {dailyForecast.slice(0, 5).map((day, index) => (
+                            <button 
+                                key={index}
+                                onClick={() => onSelectDay(index)}
+                                // Ensured button is a good touch target size (min-w-16, p-3)
+                                className={`flex flex-col items-center p-3 rounded-xl transition-all min-w-16 flex-shrink-0 border 
+                                    ${index === selectedDayIndex ? 'bg-yellow-400 border-yellow-500 text-white shadow-md' : 'bg-white border-gray-100 hover:bg-gray-50 text-gray-700'}`}
+                            >
+                                <div className={`text-sm mb-1 ${index === selectedDayIndex ? 'font-bold' : 'text-gray-600'}`}>
+                                    {index === 0 ? 'Today' : day.dayLabel}
+                                </div>
+                                <i className={`${getWeatherIcon(day.weather_code)} text-xl mb-1 ${index === selectedDayIndex ? 'text-white' : (day.rain > 0.1 ? 'text-blue-500' : 'text-yellow-500')}`}></i>
+                                <div className="text-sm font-bold">{Math.round(day.temp_max)}°</div>
+                                <div className={`text-xs ${index === selectedDayIndex ? 'text-gray-100' : 'text-gray-500'}`}>{Math.round(day.temp_min)}°</div>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Main App Component ---
+        const App = () => {
+            const [selectedVenue, setSelectedVenue] = useState(VENUES[0]);
+            const [currentWeather, setCurrentWeather] = useState(null); // Weather data for the selected HOUR
+            const [hourlyData, setHourlyData] = useState([]); // All hourly data for the selected DAY (FULL 7-day array)
+            const [dailyForecast, setDailyForecast] = useState([]); // Daily summary for 7 days
+            const [selectedDayIndex, setSelectedDayIndex] = useState(0); // 0 = Today, 1 = Tomorrow, etc.
+            const [selectedHourIndex, setSelectedHourIndex] = useState(0); // Index into the full hourlyData array
+            const [loading, setLoading] = useState(false);
+
+            // Calculate Best Time based on the currently displayed day's hourly data
+            const bestTime = useMemo(() => {
+                if (hourlyData.length === 0 || dailyForecast.length === 0) return "N/A";
+                
+                let maxIndex = -1;
+                let maxScore = -1;
+                
+                const nowHour = new Date().getHours();
+                const isToday = selectedDayIndex === 0;
+
+                const selectedDate = dailyForecast[selectedDayIndex].date;
+                // Filter the full hourly data to just the selected day
+                const dayHourlyData = hourlyData.filter(h => h.time.startsWith(selectedDate));
+                
+                for (let i = 0; i < dayHourlyData.length; i++) {
+                    const hourTime = new Date(dayHourlyData[i].time);
+                    const hour = hourTime.getHours();
+
+                    // Only consider future hours for today
+                    if (isToday && hour < nowHour) continue; 
+                    
+                    const score = calculatePlayabilityIndex(dayHourlyData[i]);
+                    if (score > maxScore) {
+                        maxScore = score;
+                        maxIndex = i;
+                    }
+                }
+
+                if (maxIndex === -1) return "Closed"; 
+
+                const bestHourTime = new Date(dayHourlyData[maxIndex].time);
+                return bestHourTime.toLocaleTimeString('en-ZA', { hour: 'numeric', minute: '2-digit' });
+
+            }, [hourlyData, selectedDayIndex, dailyForecast]);
+
+            // Function to structure the hourly data into a usable format
+            const structureHourlyData = (data) => {
+                const structured = data.hourly.time.map((time, i) => ({
+                    time: time,
+                    temperature_2m: data.hourly.temperature_2m[i],
+                    wind_speed_10m: data.hourly.wind_speed_10m[i],
+                    wind_gusts_10m: data.hourly.wind_gusts_10m[i],
+                    rain: data.hourly.rain[i] || 0,
+                    relative_humidity_2m: data.hourly.relative_humidity_2m[i],
+                    weather_code: data.hourly.weather_code[i],
+                }));
+                return structured;
+            };
+
+            const fetchWeather = async (lat, lon) => {
+                setLoading(true);
+                // Reset day selection to today (index 0) upon new venue fetch
+                setSelectedDayIndex(0); 
+                
+                try {
+                    // Fetch 7 days of hourly and daily forecast data
+                    const response = await fetch(
+                        `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,rain,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m&hourly=temperature_2m,relative_humidity_2m,rain,weather_code,wind_speed_10m,wind_gusts_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,rain_sum,wind_speed_10m_max&forecast_days=7&timezone=auto`
+                    );
+                    const data = await response.json();
+                    
+                    const structuredHourly = structureHourlyData(data);
+                    
+                    const dailySummary = data.daily.time.map((date, i) => {
+                        const dayName = new Date(date).toLocaleDateString('en-ZA', { weekday: 'short' });
+                        return {
+                            date: date,
+                            dayLabel: dayName,
+                            weather_code: data.daily.weather_code[i],
+                            temp_max: data.daily.temperature_2m_max[i],
+                            temp_min: data.daily.temperature_2m_min[i],
+                            rain: data.daily.rain_sum[i] || 0,
+                        };
+                    });
+                    
+                    setDailyForecast(dailySummary);
+                    setHourlyData(structuredHourly);
+
+                    // Determine the current hour index in the full array for initial display
+                    const nowHour = new Date().getHours();
+                    const todayDate = new Date().toISOString().split('T')[0];
+                    const initialIndex = structuredHourly.findIndex(h => new Date(h.time).getHours() === nowHour && h.time.startsWith(todayDate));
+                    
+                    const startingIndex = initialIndex !== -1 ? initialIndex : 0; 
+                    
+                    setSelectedHourIndex(startingIndex);
+                    setCurrentWeather(structuredHourly[startingIndex]);
+                } catch (error) {
+                    console.error("Failed to fetch weather data:", error);
+                    setCurrentWeather(null);
+                    setHourlyData([]);
+                    setDailyForecast([]);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            useEffect(() => {
+                fetchWeather(selectedVenue.lat, selectedVenue.lon);
+            }, [selectedVenue]);
+
+            const handleDaySelect = (index) => {
+                setSelectedDayIndex(index);
+                
+                if (dailyForecast.length === 0) return;
+                
+                const selectedDate = dailyForecast[index].date;
+                const now = new Date();
+                const isToday = index === 0;
+
+                // Find the index of the first available hour for the selected day
+                const firstAvailableHourIndex = hourlyData.findIndex(h => {
+                    if (!h.time.startsWith(selectedDate)) return false;
+                    
+                    if (isToday) {
+                        const hourTime = new Date(h.time);
+                        return hourTime.getHours() >= now.getHours();
+                    }
+                    return true;
+                });
+                
+                const startingIndex = firstAvailableHourIndex !== -1 ? firstAvailableHourIndex : 0;
+
+                if (hourlyData[startingIndex]) {
+                    setSelectedHourIndex(startingIndex);
+                    setCurrentWeather(hourlyData[startingIndex]);
+                } else {
+                    // Fallback in case there is no data
+                    setSelectedHourIndex(0);
+                    setCurrentWeather(hourlyData[0] || null);
+                }
+            };
+            
+            const handleHourSelect = (index) => {
+                setSelectedHourIndex(index);
+                setCurrentWeather(hourlyData[index]);
+            };
+            
+            const playabilityIndex = calculatePlayabilityIndex(currentWeather);
+
+            const selectedDayDate = dailyForecast[selectedDayIndex]?.date || new Date().toISOString().split('T')[0];
+
+            return (
+                // Min-h-screen ensures full scrollability on mobile
+                <div className="min-h-screen flex flex-col">
+                    <Header />
+
+                    <main className="flex-grow max-w-md mx-auto w-full p-4">
+                        
+                        {/* Venue Selector */}
+                        <div className="relative">
+                            <select 
+                                // Increased padding for better touch input
+                                className="w-full p-4 rounded-xl border border-gray-200 shadow-md appearance-none bg-white font-semibold text-gray-700 text-lg focus:outline-none focus:ring-2 focus:ring-yellow-400"
+                                value={selectedVenue.id}
+                                onChange={(e) => {
+                                    const venue = VENUES.find(v => v.id === parseInt(e.target.value));
+                                    setSelectedVenue(venue);
+                                }}
+                            >
+                                {VENUES.map(venue => (
+                                    <option key={venue.id} value={venue.id}>
+                                        {venue.name} ({venue.city})
+                                    </option>
+                                ))}
+                            </select>
+                            <div className="absolute right-4 top-1/2 transform -translate-y-1/2 pointer-events-none text-gray-400">
+                                <i className="fa-solid fa-chevron-down"></i>
+                            </div>
+                        </div>
+
+                        {/* Suggest Court Option */}
+                        <SuggestCourt />
+
+                        {loading ? (
+                            <div className="text-center py-12">
+                                <i className="fa-solid fa-circle-notch fa-spin text-4xl text-yellow-400"></i>
+                                <p className="mt-4 text-gray-500">Checking conditions...</p>
+                            </div>
+                        ) : (
+                            <>
+                                {/* 5-Day Forecast - Mobile Card with Shadow */}
+                                {dailyForecast.length > 0 && (
+                                    <WeeklyOutlook 
+                                        dailyForecast={dailyForecast} 
+                                        selectedDayIndex={selectedDayIndex} 
+                                        onSelectDay={handleDaySelect}
+                                    />
+                                )}
+
+                                {/* Hourly Selector - Horizontal Scroll for Mobile */}
+                                {hourlyData.length > 0 && (
+                                    <HourlySelector
+                                        // Pass the full hourly data, let the component handle filtering by day/time
+                                        fullHourlyData={hourlyData}
+                                        selectedHourIndex={selectedHourIndex}
+                                        onSelectHour={handleHourSelect}
+                                        dayDate={selectedDayDate}
+                                    />
+                                )}
+                                
+                                <WeatherDisplay weather={currentWeather} />
+                                <StrategyCard 
+                                    weather={currentWeather} 
+                                    altitude={selectedVenue.altitude} 
+                                    playabilityIndex={playabilityIndex}
+                                    bestTime={bestTime}
+                                />
+                            </>
+                        )}
+
+                    </main>
+
+                    {/* Footer/Ad Area for Mobile - Updated to use local image path */}
+                    <footer className="max-w-md mx-auto w-full p-4 mt-4">
+                        <div className="bg-gray-200 rounded-lg h-24 overflow-hidden flex items-center justify-center">
+                            {/* Place your banner ad image (recommended size: 448px x 96px) 
+                                in the 'assets/ads/' directory and name it 'banner-ad.png'.
+                            */}
+                            <img 
+                                src="assets/ads/banner-ad.png" 
+                                alt="Partnered Content Ad" 
+                                className="w-full h-full object-cover" 
+                                // Fallback to a placeholder text image if the local asset is missing
+                                onError={(e) => { e.target.onError = null; e.target.src='https://placehold.co/448x96/e5e7eb/6b7280?text=AD+Placeholder+(448x96)'; }}
+                            />
+                        </div>
+                    </footer>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
